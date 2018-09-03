@@ -1,0 +1,89 @@
+/* Resolution of the Stokes, or Navier-Stokes equations on a channel presenting a step */
+load "medit"
+exec("rm so.res");
+
+/* Building mesh */
+border left1(t=0,0.5){ x=0.0 ; y=0.5-t; label=1;};
+border bot1(t=0,1.0){ x=t ; y=0.0; label=0;};
+border left2(t=0,0.5){ x=1.0 ; y=0.0-t; label=0;};
+border bot2(t=0,5.0){ x=1.0+t ; y=-0.5; label=0;};
+border right(t=0,1.0){ x=6.0 ; y=-0.5+t; label=2;};
+border top(t=0,6.0){ x=6.0-t ; y=0.5; label=0;};
+
+mesh Th = buildmesh(left1(50)+bot1(50)+left2(50)+bot2(100)+right(10)+top(100));
+plot(Th,wait=1);
+
+fespace Vh(Th,P1b);
+fespace Ph(Th,P1);
+
+/* Finite Element functions */
+Vh ux0,uy0,uxo,uyo,ux,uy,vx,vy;
+Ph p0,po,p,q;
+
+/* Physical and numerical parameters */
+real nu = 0.005;
+real EPSP = 1.0e-6;
+real EPSNS = 1.0e-10;
+int itmax = 20;
+real res,normuk,normduk;
+
+/* Inlet velocity */
+func real uinlet(real s) {
+  if ( 0.0 < s && s < 0.5 ) return (8.0*s*(1.0-2.0*s));
+  else return(0.0);
+}
+
+func uin = uinlet(y);
+
+ux0 = uin;
+uy0 = 0.0;
+p0  = 0.0;
+
+/* Stokes problem for initialization */
+problem stokes([ux,uy,p],[vx,vy,q]) = int2d(Th)(2.0*nu*(dx(ux)*dx(vx)+0.5*(dx(uy)+dy(ux))*(dx(vy)+dy(vx))+ dy(uy)*dy(vy)))
+                                      - int2d(Th)(p*(dx(vx)+dy(vy)))
+                                      + int2d(Th)((dx(ux)+dy(uy))*q)
+                                      + int2d(Th)(EPSP*p*q)
+                                      + on(1,ux=ux0,uy=uy0)
+                                      + on(0,ux=0.0,uy=0.0);
+
+/* Linearized Navier-Stokes problem around value [uxo,uyo,po]; here, [ux,uy,p] are increments */
+problem lnstokes([ux,uy,p],[vx,vy,q]) = int2d(Th)(2.0*nu*(dx(ux)*dx(vx)+0.5*(dx(uy)+dy(ux))*(dx(vy)+dy(vx))+ dy(uy)*dy(vy)))
+                                         +int2d(Th)((ux*dx(uxo)+uy*dy(uxo))*vx + (ux*dx(uyo)+uy*dy(uyo))*vy)
+                                         +int2d(Th)((uxo*dx(ux)+uyo*dy(ux))*vx + (uxo*dx(uy)+uyo*dy(uy))*vy)
+                                         - int2d(Th)(p*(dx(vx)+dy(vy)))
+                                         + int2d(Th)((dx(ux)+dy(uy))*q)
+                                         + int2d(Th)(EPSP*p*q)
+                                        +int2d(Th)(2.0*nu*(dx(uxo)*dx(vx)+0.5*(dx(uyo)+dy(uxo))*(dx(vy)+dy(vx))+ dy(uyo)*dy(vy)))
+                                        +int2d(Th)((uxo*dx(uxo)+uyo*dy(uxo))*vx + (uxo*dx(uyo)+uyo*dy(uyo))*vy)
+                                        - int2d(Th)(po*(dx(vx)+dy(vy)))
+                                        + int2d(Th)((dx(uxo)+dy(uyo))*q)
+                                        + int2d(Th)(EPSP*po*q)
+                                         + on(1,ux=0.0,uy=0.0)
+                                         + on(0,ux=0.0,uy=0.0);
+
+
+/* Main loop */
+stokes;
+uxo = ux;
+uyo = uy;
+po = p;
+
+/* Save mesh and Stokes solution */
+savemesh(Th,"nstokes.mesh");
+savesol("stokes.sol",Th,[uxo,uyo]);
+
+for (int n=0; n<itmax; n++) {
+  lnstokes;
+  normuk = int2d(Th)(uxo*uxo+uyo*uyo + dx(uxo)*dx(uxo)+dy(uxo)*dy(uxo) + dx(uyo)*dx(uyo)+dy(uyo)*dy(uyo));
+  normduk = int2d(Th)(ux*ux+uy*uy + dx(ux)*dx(ux)+dy(ux)*dy(ux) + dx(uy)*dx(uy)+dy(uy)*dy(uy));
+  uxo = uxo + ux;
+  uyo = uyo + uy;
+  po  = po + p;
+  res = sqrt(normduk)/sqrt(normuk);
+  cout<<"Residual: "<<res<<endl;
+  if ( res < EPSNS ) break;
+}
+
+/* Save Navier-Stokes solution */
+savesol("nstokes.sol",Th,[uxo,uyo]);

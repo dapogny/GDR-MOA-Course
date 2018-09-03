@@ -1,0 +1,164 @@
+/* Shape optimization of a T-shaped mast via the Level Set method using the topological gradient based fixed point algorithm of S. Amstutz */
+load "medit"
+include "tools.idp"
+
+/* Create mesh */
+border bot(t=0.0,1.0){x=-0.5+t; y=0.0; label=1;};
+border right1(t=0.0,2.0){x=0.5; y=t; label=0;};
+border botr1(t=0.0,0.4){x=0.5+t; y=2.0; label=0;};
+border botr2(t=0.4,0.5){x=0.5+t; y=2.0; label=2;};
+border right2(t=0.0,1.0){x=1.0; y=2.0+t; label=0;};
+border top(t=0.0,2.0){x=1.0-t; y=3.0; label=0;};
+border left2(t=0.0,1.0){x=-1.0; y=3.0-t; label=0;};
+border botl2(t=0.0,0.1){x=-1.0+t; y=2.0; label=2;};
+border botl1(t=0.1,0.5){x=-1.0+t; y=2.0; label=0;};
+border left1(t=0.0,2.0){x=-0.5; y=2.0-t; label=0;};
+
+mesh Th = buildmesh(bot(50)+right1(100)+botr1(20)+botr2(5)+right2(50)+top(100)+left2(50)+botl2(5)+botl1(20)+left1(100));
+//savemesh(Th,"box.mesh");
+
+/* Finite Element spaces */
+fespace Vh(Th,P1);
+fespace Vh0(Th,P0);
+
+/* Functions and other parameters */
+Vh phio,phi,ux,uy,uxo,uyo,vx,vy,v,g;
+Vh0 gm,gp,Achi;
+real nt = Th.nt;
+real gx = 0.0;
+real gy = -1.0;
+real ers = 1.e-3;
+real E = 1.0;
+real nu = 0.3333;
+real E0 = ers*E;
+real nu0 = ers*nu;
+real lambda = 0.5*nu*E/((1+nu)*(1-nu));
+real mu = 0.5*E/(1+nu);
+real lambda0 = 0.5*nu0*E0/((1+nu0)*(1-nu0));
+real mu0 = 0.5*E0/(1+nu0);
+real eps = 1.e-6;
+real ell = 2.0;
+real vol,obj,newobj;
+int maxit = 200, kmax = 10;
+real ps,angle;
+real step = 0.1;
+real maxstep = 0.25;
+real minstep = 0.001;
+real tol = 0.005;
+real coef = 1.0;
+real maxcoef = 3.0;
+real mincoef = 0.1;
+string sout;
+
+/* parameters for topological derivative */
+real r1m = (1+nu)/(1-nu);
+real r2m = (3-nu)/(1+nu);
+real r3m = E0/E;
+real t1m = (1+nu0)/(1-nu);
+real t2m = (1-nu0)/(1-nu);
+real t3m = (nu0*(3*nu-4)+1)/(nu*(3*nu-4)+1);
+
+real r1p = (1+nu0)/(1-nu0);
+real r2p = (3-nu0)/(1+nu0);
+real r3p = E/E0;
+real t1p = (1+nu)/(1-nu0);
+real t2p = (1-nu)/(1-nu0);
+real t3p = (nu*(3*nu0-4)+1)/(nu0*(3*nu0-4)+1);
+
+/* Internal parameters */
+real[int] loadAchi(nt);
+real[int] triav(6),phiv(3);
+Vh phitmp,area,gm1,gp1;
+
+/* Variational formulations for P0 -> P1 reconstruction */
+varf varea(unused,v) = int2d(Th)(v);
+varf vgm(unused,v) = int2d(Th)(-gm*v);
+varf vgp(unused,v) = int2d(Th)(gp*v);
+
+/* Initialization of the Level Set function */
+phi = inils();
+normalize(phi);
+
+/* Objective function: compliance */
+macro J() (int2d(Th)(Achi*sigma(ux,uy)'*EPS(ux,uy))) // EOM
+
+/* (Positive) topological gradient for inclusion of void inside material */
+macro dJm() {
+  gm = 1.0/(r2m*r3m+t1m)*((1+r2m)*(t1m-r3m)*(Achi*sigma(ux,uy)'*EPS(ux,uy)) + 0.5*(r1m-r2m)*(r3m*(r3m-2.0*t3m)+t1m*t2m)/(r1m*r3m+t2m)*Achi*(Tr(sigma(ux,uy)))*(Tr(EPS(ux,uy))) ) -ell;
+} // EOM
+
+/* (Positive) topological gradient for inclusion of material inside void */
+macro dJp() {
+  gp =  1.0/(r2p*r3p+t1p)*((1+r2p)*(t1p-r3p)*(Achi*sigma(ux,uy)'*EPS(ux,uy)) + 0.5*(r1p-r2p)*(r3p*(r3p-2.0*t3p)+t1p*t2p)/(r1p*r3p+t2p)*Achi*(Tr(sigma(ux,uy)))*(Tr(EPS(ux,uy))) ) +ell;
+} // EOM
+
+/* State problem */
+problem elasticity([ux,uy],[vx,vy]) = int2d(Th)(Achi*sigma(ux,uy)'*EPS(vx,vy))
+                           - int1d(Th,2)(gx*vx+gy*vy)
+                           + on(1,ux=0.0,uy=0.0);
+                                                
+/* Initialization */
+volfrac(Achi,phi,ers);
+elasticity;
+
+/* Initial value of the objective function */
+vol = int2d(Th)(Achi);
+newobj = J + ell*vol;
+           
+/* Print initial objective and save initial level set function and density */
+cout<<"Initial value of the objective function: "<<newobj<<endl;
+
+/* Main loop */
+for (int it=0; it<maxit; it++) {
+  obj = newobj;
+  phio = phi;
+  uxo = ux;
+  uyo = uy;
+   
+  /* Calculation of the (normalized) topological gradient */
+  dJm;
+  dJp;
+  topDer(phi,gm,gp,g);
+  normalize(g);
+
+  /* Angle between g and phi */
+  ps = int2d(Th)(phi*g);
+  angle = acos(ps);
+  
+  /* Line search */
+  for (int k=0; k<kmax; k++) {
+    /* Update of the shape: optimality condition is phi = alpha * g, alpha >0 */
+    phi = 1.0/sin(angle)*(sin((1.0-step)*angle)*phi+sin(step*angle)*g);
+     
+    /* Calculation of the new objective function */
+    volfrac(Achi,phi,ers);
+    elasticity;
+    vol = int2d(Th)(Achi);
+    newobj = J + ell*vol;
+     
+    /* Decision */
+    /* Accept iteration */
+    if ( newobj < obj + tol*abs(obj) || step <= minstep ) {
+      step = min(1.1*step,maxstep);
+      break;
+    }
+    /* Reject iteration */
+    else {
+      step = max(0.6*step,minstep);
+      phi = phio;
+      ux = uxo;
+      uy = uyo;
+      newobj = obj;
+    }
+  }
+   
+  /* Save shape (level set + Young's modulus) and print new objective */
+  plot(Th,phi);
+  savesol("box.sol",Th,phi);
+  sout = "box."+(it+1)+".sol";
+  savesol(sout,Th,phi);
+  // sout = "young."+(it+1)+".sol";
+  // savesolP0(sout,Th,Achi);
+   
+  cout<<"Iteration "<<it<<" Objective : "<<newobj<<endl;
+}

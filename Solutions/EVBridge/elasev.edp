@@ -1,0 +1,52 @@
+/* Resolution of the linear elasticity system on a bridge */
+load "medit"
+
+/* Read the mesh file */
+string s = "br.mesh";
+mesh Th = readmesh(s);
+mesh Dh;
+plot(Th,wait=1);
+
+/* Definition of the Finite Element spaces and functions */
+fespace Vh(Th,P1); // The FE space contains two functions
+fespace Vh2(Th,[P1,P1]); // The FE space contains two functions
+Vh2 [ux,uy],[vx,vy];
+real norm; 
+
+/* Other parameters */
+real mu = 0.3846;
+real lambda = 0.5769;
+real sigma = 0.0; // shift value
+int nev = 5; // number of computed eigenpairs
+real[int] ev(nev);
+Vh2[int] [eVx,eVy](nev);
+int ier;
+
+/* Bilinear form associated to the linearized elasticity system, shifted by sigma */
+varf elas([ux,uy],[vx,vy],solver=Crout) =
+          int2d(Th)( 2.0*mu*(dx(ux)*dx(vx) + 0.5*(dy(ux)+dx(uy))*(dy(vx)+dx(vy)) + dy(uy)*dy(vy))
+                      + lambda*(dx(ux)+dy(uy))*(dx(vx)+dy(vy))
+                      - sigma*(ux*vx+uy*vy))
+          + on(1,ux=0.0,uy=0.0);
+
+/* Bilinear form associated to the rhs of the eigenvalue problem */
+varf b([ux,uy],[vx,vy]) = int2d(Th)(ux*vx+uy*vy);
+
+/* Matrices associated to both bilinear forms */
+matrix A = elas(Vh2,Vh2,solver=Crout,factorize=1);
+matrix B = b(Vh2,Vh2,solver=Crout,factorize=1);
+
+/* Calculation of eigenvalues and eigenvectors ; 
+   quite misleading syntax: passing the first component of eV will store all its components */
+ier = EigenValue(A,B,sym=true,sigma=sigma,value=ev,vector=eVx,tol=1.e-10,maxit=0,ncv=0);
+
+/* Normalization and plot result */
+for (int k=0; k<nev; k++) {
+  cout<<"Eigenvalue "<<k<<": "<<ev[k]<<endl;
+  norm = int2d(Th)(eVx[k]*eVx[k]+eVy[k]*eVy[k]);
+  norm = sqrt(norm);
+  [eVx[k],eVy[k]] = [eVx[k]/norm,eVy[k]/norm];
+  Dh = movemesh(Th,[x+eVx[k],y+eVy[k]]);
+  s = "br."+k+".mesh";
+  savemesh(Dh,s);
+}

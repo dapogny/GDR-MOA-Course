@@ -1,0 +1,147 @@
+load "medit"
+
+/* Border of the computational domain */
+border input1(t=0.0,1.0){x = 0.0; y = 5.0-t; label = 1;};
+border circle1(t=-0.5*pi,0.5*pi){x = 1.5*cos(t); y = 2.5-1.5*sin(t); label=2;};
+border input2(t=0.0,1.0){x = 0.0; y = 1.0-t; label = 1;};
+border bottom(t=0.0,10.0){x=t; y= 0.0; label=2;};
+border output2(t=0.0,1.0){x = 10.0; y = 0.0+t; label = 3;};
+border circle2(t=0.5*pi,1.5*pi){x = 10.0+ 1.5*cos(t); y = 2.5-1.5*sin(t); label=2;};
+border output1(t=0.0,1.0){x = 10.0; y = 4.0+t; label = 3;};
+border top(t=0.0,10.0){x =10.0-t; y = 5.0; label = 2;};
+
+/* Create, then display initial mesh */
+mesh Th = buildmesh( input1(10) + circle1(10) + input2(10) + bottom(40) + output2(10) + circle2(10) + output1(10)  + top(40) );
+plot(Th,wait=1,ps="initial mesh");
+
+/* Parameters */
+real eps = 1.e-5;  //penalization parameter
+real mu = 0.5;
+real pout = 1.0;
+real dissip = 0.0;
+real cost = 0.0;
+real newcost = 0.0;
+mesh Dh;
+int nit = 100;
+real alpha = 0.3;
+real step = 0.001;
+real chkvoltri;
+real epsvoltri = 1.e-4;
+real tol = 0.001;
+real tgv = 1.e10;
+real vol = 0.0;
+real ell = 10.0;
+
+/* Input flow */
+func real uinput() {
+    if( y>=4.0 ) return(4.0*(y-4.0)*(1.0-(y-4.0)));
+    else return(4.0*y*(1.0-y));
+}
+
+/* Output flow */
+func real uoutput() {
+    if( y>=4.0 ) return(4.0*(y-4.0)*(1.0-(y-4.0)));
+    else return(4.0*y*(1.0-y));
+}
+
+/* Finite element spaces */
+fespace Vh(Th,P2);
+fespace Ph(Th,P1);
+fespace Vhdc(Th,P1dc);
+
+/* Functions */
+Vh ux,uy,vvx,vvy,sgx,sgy,uox,uoy;
+Ph p,pp,chidir;
+Vhdc shapegdc;
+
+/* Stokes problem */
+problem Stokes([ux,uy,p],[vvx,vvy,pp],solver=Crout) =
+  int2d(Th)( 2.0*mu*(dx(ux)*dx(vvx) + 0.5*(dy(ux)+dx(uy))*(dy(vvx)+dx(vvy)) + dy(uy)*dy(vvy)) )
+  - int2d(Th)( p*(dx(vvx)+dy(vvy)) )
+  + int2d(Th)( pp*(dx(ux)+dy(uy)) )
+  + int2d(Th)( eps*p*pp )
+  + on(1, ux=uinput(), uy=0.0)
+  + on(3, ux=uoutput(), uy=0.0)
+  + on(2, ux=0.0, uy=0.0);
+
+/* Localization function for freezing nodes */
+func real locdir() {
+  if ( ( y <= 1.0 || y <= 4.0 ) && ( x < 0.04 || x > 9.96 ) ) return(1.0);
+  else return(0.0);
+}
+chidir = locdir();
+
+/* Extension / regularization problem */
+problem Velext([sgx,sgy],[vvx,vvy],solver=Crout) =
+int2d(Th)(alpha*(dx(sgx)*dx(vvx) + dy(sgx)*dy(vvx) + dx(sgy)*dx(vvy) + dy(sgy)*dy(vvy)) + (1+chidir*tgv)*(sgx*vvx+sgy*vvy) )
+- int1d(Th,2)( shapegdc*(N.x*vvx+N.y*vvy) )
++ on(1, 3, sgx=0.0, sgy=0.0);
+
+/* Solve problem and plot solution */
+Stokes;
+plot(Th, [ux,uy], wait=1);
+
+/* Computation of the cost function */
+dissip = int2d(Th)( 2.0*mu*(dx(ux)*dx(ux) + 0.5*(dy(ux)+dx(uy))*(dy(ux)+dx(uy)) + dy(uy)*dy(uy)) );
+vol = int2d(Th)( 1.0 );
+cost = dissip + ell*vol;
+
+/* Main optimization loop */
+for(int n=1; n<=nit; n++){
+
+  /* Computation of the shape gradient */
+  shapegdc = 2.0*mu*(dx(ux)*dx(ux) + 0.5*(dy(ux)+dx(uy))*(dy(ux)+dx(uy)) + dy(uy)*dy(uy)) - ell;
+    
+  /* Extension / regularization of the shape gradient */
+  Velext;
+    
+  /* Check motion of the mesh : if the resulting mesh has an almost null or flipped element, start back the process with a smaller step */
+  chkvoltri = checkmovemesh(Th,[x+step*sgx,y+step*sgy]);
+  
+  if( chkvoltri < epsvoltri ) {
+    cout<<"Iteration "<<n<<" rejected; inverted triangle."<<endl;
+      
+    step *= 0.5;
+    continue;
+  }
+    
+  /* Else, go on with the new mesh */
+  Dh = movemesh(Th,[x+step*sgx,y+step*sgy]);
+    
+  /* Resolution of the state equation */
+  uox = ux;
+  uoy = uy;
+  Stokes;
+  
+  /* Evaluation of the new objective function */
+  dissip = int2d(Th)( 2.0*mu*(dx(ux)*dx(ux) + 0.5*(dy(ux)+dx(uy))*(dy(ux)+dx(uy)) + dy(uy)*dy(uy)) );
+  vol = int2d(Th)( 1.0 );
+  newcost = dissip + ell*vol;
+  
+  /* If the objective function is decreased, keep the new mesh; else, retrieve the previous one */
+  if( newcost < (1+tol)*cost ) {
+    cout<<"Iteration "<<n<<" accepted; objective: "<<cost<<" ---> "<<newcost<<endl;
+      
+    cost = newcost;
+    step *= 1.01;
+    Th = Dh;
+    
+    /* Adapt the mesh to the current solution of Stokes' problem */
+    Th = adaptmesh(Th,[ux,uy],hmin=0.15,hmax=0.3);
+  
+    plot(Th,wait=1,ps="current mesh");
+
+  }
+  else {
+    cout<<"Iteration "<<n<<" rejected; objective: "<<cost<<" v.s. "<<newcost<<endl;
+
+    step*= 0.6;
+    ux = uox;
+    uy = uoy;
+  }
+    
+}
+
+/* Print mesh and solution */
+//savemesh(Th,"pipefin.mesh");
+savesol("2pipe.sol",Th,[ux,uy]);

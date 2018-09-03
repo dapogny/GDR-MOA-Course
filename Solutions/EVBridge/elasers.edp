@@ -1,0 +1,46 @@
+/* Resolution of the linear elasticity system on a bridge */
+load "medit"
+include "tools.idp"
+
+/* Load mesh and solution */
+mesh Th = readmesh("box.mesh");
+mesh Dh;
+
+/* Functions and parameters */
+int nt = Th.nt;
+int np = Th.nv;
+real mu = 0.3846;
+real lambda = 0.5769;
+real ers = 1.e-3;
+real gx = 0.0; 
+real gy = -0.01;
+
+/* Internal parameters */
+string s;
+real[int] loadAchi(nt);
+real[int] loadsol(np);
+real[int] triav(6),phiv(3);
+
+/* Finite element spaces and functions */
+fespace Vh(Th,P1);
+fespace Vh0(Th,P0);
+
+Vh phi,ux,uy,vx,vy;
+Vh0 Achi;
+
+/* Load level set function from file */
+readsol("box.sol",Th,phi);
+
+/* Calculation of the P0 function Achi = volume fraction of material and ersatz inside each triangle */
+volfrac(Achi,phi,ers);
+
+/* Approximate linear elasticity system */
+problem elaseps([ux,uy],[vx,vy]) = int2d(Th)(Achi*mu*(2.0*dx(ux)*dx(vx) + (dx(uy)+dy(ux))*(dx(vy)+dy(vx))
+                                          + 2.0*dy(uy)*dy(vy)) + Achi*lambda*(dx(ux)+dy(uy))*(dx(vx)+dy(vy)) )
+                                  - int1d(Th,2)(gx*vx+gy*vy)
+                                  + on(1,ux=0.0,uy=0.0);
+
+/* Solve problem and save solution */
+elaseps;
+Dh = movemesh(Th,[x+ux,y+uy]);
+savemesh(Dh,"disp.mesh");

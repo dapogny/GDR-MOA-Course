@@ -1,0 +1,46 @@
+/* Resolution of the Laplace equation in a L-shaped domain */
+load "medit"
+
+/* Definition of the boundary curves of the domain */
+border left(t=0,1.0){ x=0.0 ; y=1.0-t; label=1;};
+border bot(t=0,1.0){ x=t ; y=0.0; label=1;};
+border right(t=0,0.5){ x=1.0 ; y=t; label=1;};
+border ang1(t=0,0.5){ x=1.0-t ; y=0.5; label=1;};
+border ang2(t=0,0.5){ x=0.5 ; y=0.5+t; label=1;};
+border top(t=0,0.5){ x=0.5-t ; y=1.0; label=1;};
+
+/* Build mesh, display and save as a .mesh file */
+mesh Th = buildmesh(left(10)+bot(10)+right(5)+ang1(5)+ang2(5)+top(5));
+plot(Th,wait=1);
+savemesh(Th,"Lshape.mesh");
+
+/* Definition of Finite Element spaces and functions */
+fespace Vh(Th,P1); // or P2
+Vh u,v;
+
+/* Other parameters */
+real gamma = 1.0;
+real eps = 0.05;
+int maxit = 5;
+
+/* Source term */
+func real f() {
+  return(1.0);
+}
+
+/* Stationary heat equation */
+problem laplace(u,v,solver=CG) = int2d(Th)(gamma*(dx(u)*dx(v)+dy(u)*dy(v)))
+                                  - int2d(Th)(f()*v)
+                                  + on(1,u=0.0);  // Homogeneous Dirichlet boundary condition
+
+/* Multiple resolutions of the Laplace equation, intertwined with mesh adaptation steps */
+for (int it=0; it<maxit; it++) {
+  laplace;
+  Th = adaptmesh(Th,u,err=eps);
+  plot(Th,u,fill=1);
+  eps *= 0.5;
+}
+
+/* Display and save the result */
+savemesh(Th,"Lshape.mesh");
+savesol("Lshape.sol",Th,u);

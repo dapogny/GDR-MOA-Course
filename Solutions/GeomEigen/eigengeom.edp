@@ -1,0 +1,188 @@
+/* Maximization of the fundamental frequency of a beam by geometric optimization */
+load "medit"
+
+/* Border of the initial domain */
+border left(t=0.0,1.0){x = 0.0; y = 1.0-t; label = 1;};
+border bot(t=0.0,5.0){x = t; y= 0.0; label=2;};
+border right(t=0.0,1.0){x = 5.0; y = t; label = 2;};
+border top(t=0.0,5.0){x =5.0-t; y = 1.0; label = 2;};
+border h1 (t=0.0,2.0*pi){x=1.0+0.05*cos(t); y=0.8+0.05*sin(t); label=0;};
+border h2 (t=0.0,2.0*pi){x=1.0+0.05*cos(t); y=0.2+0.05*sin(t); label=0;};
+border h3 (t=0.0,2.0*pi){x=1.5+0.05*cos(t); y=0.5+0.05*sin(t); label=0;};
+border h4 (t=0.0,2.0*pi){x=2.0+0.05*cos(t); y=0.8+0.05*sin(t); label=0;};
+border h5 (t=0.0,2.0*pi){x=2.0+0.05*cos(t); y=0.2+0.05*sin(t); label=0;};
+border h6 (t=0.0,2.0*pi){x=2.5+0.05*cos(t); y=0.5+0.05*sin(t); label=0;};
+border h7 (t=0.0,2.0*pi){x=3.0+0.05*cos(t); y=0.8+0.05*sin(t); label=0;};
+border h8 (t=0.0,2.0*pi){x=3.0+0.05*cos(t); y=0.2+0.05*sin(t); label=0;};
+border h9 (t=0.0,2.0*pi){x=3.5+0.05*cos(t); y=0.5+0.05*sin(t); label=0;};
+border h10 (t=0.0,2.0*pi){x=4.0+0.05*cos(t); y=0.8+0.05*sin(t); label=0;};
+border h11 (t=0.0,2.0*pi){x=4.0+0.05*cos(t); y=0.2+0.05*sin(t); label=0;};
+border h12 (t=0.0,2.0*pi){x=4.5+0.05*cos(t); y=0.5+0.05*sin(t); label=0;};
+
+/* Create, then display initial mesh */
+mesh Th = buildmesh( left(50) + bot(200) + right(50) + top(200)
+              + h1(-20) + h2(-20) + h3(-20) + h4(-20) + h5(-20) + h6(-20) + h7(-20)
+                    + h8(-20) + h9(-20) + h10(-20) + h11(-20) + h12(-20) );
+plot(Th,wait=1,ps="initial mesh");
+
+/* Parameters */
+real eps = 1.e-6;
+real mu = 0.3846;
+real lambda = 0.5769;
+real cply = 0.0;
+real obj = 0.0,newobj = 0.0;
+mesh Dh;
+int nit = 200;
+int ier;
+real meshsiz = 0.02;
+real alpha = (2.0*meshsiz)^2;
+real gmax;
+real coef = 0.2;
+real coefmax = 0.5;
+real coefmin = 0.01;
+real step;
+real chkvoltri;
+real epsvoltri = 1.e-6;
+real tol = 0.01;
+real tgv = 1.e10;
+real vol = 0.0;
+real ell = 1.e-5;
+real muel = 0.3846;
+real lambdael = 0.5769;
+real rhomax = 10000.0;
+real norm;
+real sigma = 0.0;
+int nev = 1; // number of computed eigenpairs
+real[int] ev(nev);
+string s;
+
+/* Finite element spaces: P1 elements for the resolution of the linearized elasticity system */
+fespace Vh2(Th,[P1,P1]);
+fespace Vh(Th,P1);
+fespace Vh0(Th,P0);
+
+/* Functions */
+Vh2[int] [eVx,eVy](nev);
+Vh2 [ux,uy],[vx,vy],[grx,gry],[eVxo,eVyo];
+Vh   ng;
+Vh0  gr0;
+
+/* Tangential derivative */
+macro Dt(u) [dx(u)-(dx(u)*N.x+dy(u)*N.y)*N.x,dy(u)-(dx(u)*N.x+dy(u)*N.y)*N.y] // EOM
+
+/* Characteristic function for the tip mass */
+func real chifix () {
+  real r = 0.05;
+  if ( ( y < r ) || ( y > 1.0-r ) || ( x > 5.0 -r ) ) return(1.0);
+  else return(0.0);
+}
+
+/* Characteristic function for the tip mass */
+func real chiw () {
+  real r = 0.1;
+  if ( (x-5.0)^2 + (y-1.0)^2 < r^2 || (x-5.0)^2 + (y-0.0)^2 < r^2 ) return(1.0);
+  else return(0.0);
+}
+
+/* Variational formulation for the linearized elasticity system */
+varf elas([ux,uy],[vx,vy],solver=Crout) =
+  int2d(Th)( 2.0*mu*(dx(ux)*dx(vx) + 0.5*(dy(ux)+dx(uy))*(dy(vx)+dx(vy)) + dy(uy)*dy(vy))
+              + lambda*(dx(ux)+dy(uy))*(dx(vx)+dy(vy)) ) 
+  - int2d(Th)(sigma*(ux*vx+uy*vy))
+  + on(1,ux=0.0,uy=0.0);
+
+/* Variational formulation associated to the mass matrix */
+varf b([ux,uy],[vx,vy]) = int2d(Th)((1.0+rhomax*chiw())*(ux*vx+uy*vy));
+
+/* Macro for solving the eigenvalue problem */
+macro eigensolve () {
+  matrix A = elas(Vh2,Vh2,solver=Crout,factorize=1);
+  matrix B = b(Vh2,Vh2,solver=Crout,factorize=1);
+  
+  /* Calculation of eigenvalues and eigenvectors */
+  ier = EigenValue(A,B,sym=true,sigma=sigma,value=ev,vector=eVx,tol=1.e-10,maxit=0,ncv=0);
+  
+  /* Normalization of the mode */
+  norm = int2d(Th)(eVx[0]*eVx[0]+eVy[0]*eVy[0]);
+  norm = sqrt(norm);
+  [eVx[0],eVy[0]] = [eVx[0]/norm,eVy[0]/norm];
+} // EOM
+
+/* Objective function */
+macro J() ( -ev[0] ) // EOM
+
+/* Extension / regularization problem */
+problem velext([grx,gry],[vx,vy],solver=Crout) =
+  int2d(Th)(muel*(2.0*dx(grx)*dx(vx) + (dx(gry)+dy(grx))*(dx(vy)+dy(vx)) + 2.0*dy(gry)*dy(vy))
+                + lambdael*(dx(grx)+dy(gry))*(dx(vx)+dy(vy)) + (1.0+(chifix()+chiw())*tgv)*(grx*vx+gry*vy) )
+  + int1d(Th,0)( alpha*(Dt(grx)'*Dt(vx) + Dt(gry)'*Dt(vy)) ) 
+  - int1d(Th,0)( gr0*(N.x*vx+N.y*vy) )
+  + on(1,2,grx=0.0,gry=0.0);
+
+/* (Negative) shape gradient of J */
+macro dJ() {
+  gr0 = 2.0*mu*(dx(eVx[0])*dx(eVx[0]) + 0.5*(dy(eVx[0])+dx(eVy[0]))*(dy(eVx[0])+dx(eVy[0])) + dy(eVy[0])*dy(eVy[0])) + lambda*(dx(eVx[0])+dy(eVy[0]))*(dx(eVx[0])+dy(eVy[0])) - (1.0+rhomax*chiw())*(eVx[0]*eVx[0]+eVy[0]*eVy[0])- ell;
+  velext;
+} // EOM
+
+/* Initialization */
+eigensolve;
+
+/* Initial value of the objective function */
+vol     = int2d(Th)( 1.0 );
+obj     = J + ell*vol;
+
+/* Main optimization loop */
+for(int n=0; n<nit; n++){
+  Dh = Th;
+  [eVxo,eVyo] = [eVx[0],eVy[0]];
+
+  if ( n % 5 == 0 ) {
+    s =  "beam."+n+".mesh";
+    savemesh(Th,s);
+  }
+   
+  /* Computation of the shape gradient as a P1 function and size of the time step */
+  dJ;
+  ng = sqrt(grx*grx+gry*gry);
+  gmax = ng[].max;
+  step = coef*meshsiz / (eps^2+gmax);
+  
+  /* Attempt motion of the mesh: if the moved mesh has an almost null or flipped element, restart the operation with a smaller step */
+  chkvoltri = checkmovemesh(Th,[x+step*grx,y+step*gry]);
+
+  if( chkvoltri < epsvoltri ) {
+    cout<<"Iteration "<<n<<" rejected; inverted triangle."<<endl;
+    coef *= 0.5;
+    continue;
+  }
+    
+  /* Else, effectively move the new mesh */
+  Th = movemesh(Th,[x+step*grx,y+step*gry]);
+  
+  /* Evaluation of the new objective function */
+  eigensolve;
+  vol    = int2d(Th)( 1.0 );
+  newobj = J + ell*vol;
+  
+  /* Decision */
+  if( newobj < obj+tol*abs(obj) || coef <= coefmin ) {
+    cout<<"Iteration "<<n<<" accepted; objective: "<<obj<<" ---> "<<newobj<<endl;
+    obj   = newobj;
+    coef  = min(coefmax,1.02*coef);
+    
+    /* Adapt the mesh to the current solution of the elasticity system */
+    Th = adaptmesh(Th,[ux,uy],hmin=0.01,hmax=0.04);
+    plot(Th,wait=1,ps="current mesh");
+  }
+  else {
+    cout<<"Iteration "<<n<<" rejected; objective: "<<obj<<" v.s. "<<newobj<<endl;
+    coef  = max(coefmin,0.6*coef);
+    Th = Dh;
+    [eVx[0],eVy[0]] = [eVxo,eVyo];
+  }
+}
+
+/* Print mesh and solution */
+savemesh(Th,"beam.mesh");
+//savesol("pipe.sol",Th,[ux,uy]);

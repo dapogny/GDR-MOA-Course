@@ -1,0 +1,152 @@
+/* Topology optimization of a linearly elastic cantilever beam */
+load "medit"
+
+/* Create mesh */
+border left(t=0.0,1.0){ x=-1.0; y=1.0-t; label=1; };
+border bot(t=0.0,2.0){ x=-1.0+t; y=0.0; label=0; };
+border right1(t=0.0,0.45){ x=1.0; y=t; label=0; };
+border right2(t=0.45,0.55){ x=1.0; y=t; label=2; };
+border right3(t=0.55,1.0){ x=1.0; y=t; label=0; };
+border top(t=0.0,2.0){ x=1.0-t; y=1.0; label=0; };
+
+mesh Th = buildmesh(left(100)+bot(200)+right1(50)+right2(10)+right3(50)+top(200));
+// savemesh(Th,"box.mesh");
+
+/* Finite Element spaces */
+fespace Vh(Th,P1);
+fespace Vh0(Th,P0);
+
+/* Functions and other parameters */
+Vh ux,uy,uxo,uyo,vx,vy,v,h,hdisp,ho,hr,hro,g;
+Vh0 g0;
+real gx = 0.0;
+real gy = -1.0;
+real mu = 0.3846;
+real lambda = 0.5769;
+real ers = 1.e-3;
+real eps = 1.e-6;
+real alpha = 0.02;
+real beta = 3.0;
+real meas;
+real ell = 10.0;
+real vol,obj,newobj;
+int maxit = 200, kmax = 10;
+real step = 0.1;
+real gmax;
+real tol = 0.2;
+real maxstep = 0.2;
+real minstep = 0.002;
+
+/* Interpolation profile for the lamé coefficients */
+macro zetalm(t) ( lambda*(ers + (1.0-ers)*t^3) ) // EOM
+macro zetalmprime(t) ( 3.0*lambda*(1.0-ers)*t^2 ) // EOM
+macro zetamu(t) ( mu*(ers + (1.0-ers)*t^3) ) // EOM
+macro zetamuprime(t) ( 3.0*mu*(1.0-ers)*t^2 ) // EOM
+
+/* Approximate Heaviside function */
+macro heav(t) ( 1.0-exp(-beta*t) + exp(-beta)*t ) // EOM
+macro heavprime(t) ( exp(-beta) + beta*exp(-beta*t) ) // EOM
+
+/* Regularization of density */
+problem hregul(hr,v) = int2d(Th)(alpha^2*(dx(hr)*dx(v)+dy(hr)*dy(v)) + hr*v)
+                      - int2d(Th)(h*v);
+
+/* Regularization of shape derivative */
+problem sdreg(g,v) = int2d(Th)(alpha^2*(dx(g)*dx(v)+dy(g)*dy(v)) + g*v)
+                      - int2d(Th)(g0*v);
+
+/* Objective function */
+macro J() (int2d(Th)(zetamu(heav(hr))*(2.0*dx(ux)*dx(ux) + (dx(uy)+dy(ux))*(dx(uy)+dy(ux))
+                              + 2.0*dy(uy)*dy(uy)) + zetalm(heav(hr))*(dx(ux)+dy(uy))*(dx(ux)+dy(uy)))) // EOM
+
+/* Volume function */
+macro volume(hr) (int2d(Th)(heav(hr))) // EOM
+
+/* Frechet derivative */
+macro dJ() {
+  g0 = -zetamuprime(heav(hr))*heavprime(hr)*(2.0*dx(ux)*dx(ux) + (dx(uy)+dy(ux))*(dx(uy)+dy(ux)) + 2.0*dy(uy)*dy(uy))
+       -zetalmprime(heav(hr))*heavprime(hr)*(dx(ux)+dy(uy))*(dx(ux)+dy(uy))  + ell*heavprime(hr);
+  sdreg;
+} // EOM
+
+/* Truncation of the density field between 0 and 1 */
+macro proj() {
+  h = min(1.0,max(h,0.0));
+} // EOM
+
+/* State problem */
+problem elasticity([ux,uy],[vx,vy]) = int2d(Th)(zetamu(heav(hr))*(2.0*dx(ux)*dx(vx) + (dx(uy)+dy(ux))*(dx(vy)+dy(vx))
+                                          + 2.0*dy(uy)*dy(vy)) + zetalm(heav(hr))*(dx(ux)+dy(uy))*(dx(vx)+dy(vy)) )
+                           - int1d(Th,2)(gx*vx+gy*vy)
+                           + on(1,ux=0.0,uy=0.0);
+
+
+/* Initialization: design full of high conductivity */
+h = 0.5;
+proj(h);
+hregul;
+elasticity;
+
+/* Initial value of the objective function */
+vol = volume(hr);
+newobj = J + ell*vol;
+
+cout<<"Initial value of the objective function: "<<newobj<<endl;
+
+/* Main loop */
+for (int it=0; it<maxit; it++) {
+  
+  /* Update coefficient of the heaviside projection */
+   if ( it % 5 == 0 ) {
+    beta = beta + 2;
+    elasticity;
+    vol = volume(hr);
+    newobj = J + ell*vol;
+  }
+  
+  obj = newobj;
+  ho = h;
+  hro = hr;
+  uxo = ux;
+  uyo = uy;
+  
+  /* Calculation of the shape gradient */
+  dJ;
+  gmax = max(g[].max,-g[].min);
+  
+  /* Line search */
+  for (int k=0; k<kmax; k++) {
+    /* Update of topology */
+    h = h - step/(eps+gmax)*g;
+    proj(h);
+
+    /* Calculation of the new objective function */
+    hregul;
+    elasticity;
+    vol = volume(hr);
+    newobj = J + ell*vol;
+  
+    /* Decision */
+    /* Accept iteration */
+    if ( newobj < obj + tol*abs(obj) || step <= minstep ) {
+      step = min(1.1*step,maxstep);
+      break;
+    }
+    /* Reject iteration */
+    else {
+      step = max(0.6*step,minstep);
+      h = ho;
+      hr = hro;
+      ux = uxo;
+      uy = uyo;
+      newobj = obj;
+    }
+  }
+  
+  /* Plot shape and print new objective */
+  hdisp = heav(hr);
+  plot(Th,hdisp,fill=1);
+  savesol("box.sol",Th,hdisp);
+  cout<<"Iteration "<<it<<" Objective : "<<newobj<<endl;
+}
+

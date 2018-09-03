@@ -1,0 +1,236 @@
+/* Tools for the practice of the Level Set Method for shape optimization */
+
+/* Calculate the local volume fraction inside each triangle as a P0 function over the mesh */
+macro volfrac(Achi,phi,ers) {
+  for (int n=0; n<nt; n++) {
+    triav[0] = Th[n][0].x;
+    triav[1] = Th[n][0].y;
+    triav[2] = Th[n][1].x;
+    triav[3] = Th[n][1].y;
+    triav[4] = Th[n][2].x;
+    triav[5] = Th[n][2].y;
+    phiv[0]  = phi(triav[0],triav[1]);
+    phiv[1]  = phi(triav[2],triav[3]);
+    phiv[2]  = phi(triav[4],triav[5]);
+    loadAchi[n] = volfrac1tri(triav,phiv,ers);
+  }
+  
+  Achi[] = loadAchi;
+} // EOM
+
+/* Symmetrize an input level set function */
+macro symmshape(phi) {
+  phitmp = phi;
+  func real symfunc() {
+    if ( x > 0.0 ) return (phitmp(x,y));
+    else return(phitmp(-x,y));
+  }
+  phi = symfunc();
+
+} // EOM
+
+/* Calculate the volume fraction of the domain inside the triangle defined by triav; the domain is supplied by the 3 values of the level set function at the vertices of the triangle */
+func real volfrac1tri(real[int] &triav,real[int] &phiv,real ers) {
+  real        x0,y0,x1,y1,x2,y2;
+  real[int]   a(3);
+  int         nplus,nminus,nzeros,imin1,imin2,ip1,ip2,iz;
+  real        dd,rap,voltri,volsstri,pint1x,pint1y,pint2x,pint2y;
+  real        THRES = 1.e-12;
+  
+  x0 = triav[0];
+  y0 = triav[1];
+  
+  x1 = triav[2];
+  y1 = triav[3];
+  
+  x2 = triav[4];
+  y2 = triav[5];
+  
+  nplus = 0;
+  nminus = 0;
+  nzeros =0;
+  
+  imin1 = -1;
+  imin2 = -1;
+  ip1 = -1;
+  ip2 = -1;
+  iz = -1;
+  
+  for (int i=0; i<3; i++) {
+    if ( phiv[i] < THRES ) {
+      nminus++;
+      if ( imin1 < 0 ) imin1 = i;
+      else imin2 = i;
+    }
+    else if ( phiv[i] > THRES ) {
+      nplus++;
+      if ( ip1 < 0 ) ip1 = i;
+      else ip2 = i;
+    }
+    else {
+      nzeros++;
+      iz = i;
+    }
+  }
+  
+  if ( nminus == 0 ) return(ers);
+  if ( nminus == 3 ) return(1.0);
+  if ( nzeros == 3 ) exit(0);
+  
+  if ( nminus == 1 ) {
+    x0 = triav[2*imin1+0];
+    y0 = triav[2*imin1+1];
+    
+    x1 = triav[2*ip1+0];
+    y1 = triav[2*ip1+1];
+    
+    a[0] = phiv[imin1];
+    a[1] = phiv[ip1];
+    
+    if ( nzeros == 0) {
+      assert ( ip2 != -1 );
+      x2 = triav[2*ip2+0];
+      y2 = triav[2*ip2+1];
+      a[2] = phiv[ip2];
+    }
+    else {
+      assert( iz != -1);
+      x2 = triav[2*iz+0];
+      y2 = triav[2*iz+1];
+      a[2] = phiv[iz];
+    }
+    
+    dd = - a[0] / (a[1] - a[0]);
+    pint1x = x0 + dd*(x1-x0);
+    pint1y = y0 + dd*(y1-y0);
+    
+    dd = - a[0] / (a[2] - a[0]);
+    pint2x = x0 + dd*(x2-x0);
+    pint2y = y0 + dd*(y2-y0);
+    
+    volsstri = 0.5*abs((pint1x-x0)*(pint2y-y0)-(pint1y-y0)*(pint2x-x0));
+    voltri =  0.5*abs((x1-x0)*(y2-y0)-(y1-y0)*(x2-x0));
+    rap = volsstri / voltri;
+    if ( rap > 1.0 ) exit(0);
+    
+    return ( rap + ers*(1.0 - rap) );
+  }
+  
+  if ( nminus == 2 ) {
+    
+    if ( nzeros == 0 ) {
+      assert ( ip1 != -1 );
+      x0 = triav[2*ip1+0];
+      y0 = triav[2*ip1+1];
+      a[0] = phiv[ip1];
+    }
+    else {
+      assert( iz != -1 );
+      x0 = triav[2*iz+0];
+      y0 = triav[2*iz+1];
+      a[0] = phiv[iz];
+    }
+    
+    x1 = triav[2*imin1+0];
+    y1 = triav[2*imin1+1];
+    
+    
+    x2 = triav[2*imin2+0];
+    y2 = triav[2*imin2+1];
+    
+    a[1] = phiv[imin1];
+    a[2] = phiv[imin2];
+    
+    dd = - a[0] / (a[1] - a[0]);
+    pint1x = x0 + dd*(x1-x0);
+    pint1y = y0 + dd*(y1-y0);
+    
+    dd = - a[0] / (a[2] - a[0]);
+    pint2x = x0 + dd*(x2-x0);
+    pint2y = y0 + dd*(y2-y0);
+    
+    volsstri = 0.5*abs((pint1x-x0)*(pint2y-y0)-(pint1y-y0)*(pint2x-x0));
+    voltri =  0.5*abs((x1-x0)*(y2-y0)-(y1-y0)*(x2-x0));
+    rap = volsstri / voltri;
+    if ( rap > 1.0 ) exit(0);
+    
+    return( (1.0-rap) + ers*rap );
+  }
+}
+
+/* Explicit initial level set function */
+func real inils() {
+  real d,dd,r;
+  d = 5.0;
+  r = 0.02;
+  
+  for(int j=0; j<=8; j++) {
+    dd = ((x-(-1.0 + 0.25*j))^2 + (y-1.5)^2 - r^2);
+    d = min(d,dd);
+  }
+  
+  for(int j=0; j<=7; j++) {
+    dd = ((x-(-0.83333 + 0.25*j))^2 + (y-1.25)^2 - r^2);
+    d = min(d,dd);
+  }
+  
+  for(int j=0; j<=8; j++) {
+    dd = ((x-(-1.0 + 0.25*j))^2 + (y-1.0)^2 - r^2);
+    d = min(d,dd);
+  }
+  
+  for(int j=0; j<=7; j++) {
+    dd = ((x-(-0.83333 + 0.25*j))^2 + (y-0.65)^2 - r^2);
+    d = min(d,dd);
+  }
+  
+  for(int j=0; j<=8; j++) {
+    dd = ((x-(-1.0 + 0.25*j))^2 + (y-0.35)^2 - r^2);
+    d = min(d,dd);
+  }
+  
+  return(-d);
+}
+
+/* Calculate the normal vector field to the shape as a P1 vector field [nx,ny] */
+macro normalvec(phi) {
+  real eps1 = 1.e-6;
+  real alpha = 1.e-4;
+  
+  /* Calculation of the normal vector as a P0 vector field */
+  ngrphi = dx(phi)*dx(phi)+dy(phi)*dy(phi);
+  nx0 = dx(phi) / (sqrt(eps1*eps1 + ngrphi));
+  ny0 = dy(phi) / (sqrt(eps1*eps1 + ngrphi));
+  
+  /* Reconstruction as a P1 vector field */
+  solve reconsNor([nx,ny],[vx,vy]) = int2d(Th)(alpha*(dx(nx)*dx(vx)+dy(nx)*dy(vx)+dx(ny)*dx(vy)+dy(ny)*dy(vy))
+                                                + nx*vx+ny*vy)
+                                       - int2d(Th)(nx0*vx+ny0*vy);
+} // EOM
+
+/* Calculate the curvature as a P1 field */
+macro curvature() {
+  kappa0 = dx(nx)+dy(ny);
+  solve reconsKappa(kappa,v) = int2d(Th)(alpha*(dx(kappa)*dx(v)+dy(kappa)*dy(v)) + kappa*v)
+                               - int2d(Th)(kappa0*v);
+} // EOM
+
+/* Advect function phi and redistancing */
+macro advectRedist(phio,phi,velx,vely,step) {
+   phitmp = convect([velx,vely],-step,phio);
+   distance(Th,phitmp,phi[]);
+} // EOM
+
+/* Save a P0 solution on mesh */
+macro savesolP0(s,Th,psi0) {
+  ofstream f(s);
+  real barx,bary;
+  f << "MeshVersionFormatted 1\n\nDimension 2\n\nSolAtTriangles\n"<<Th.nt<<"\n1 1\n"<<endl;
+  
+  for (int n=0; n<Th.nt; n++) {
+    barx = 1.0/3.0*(Th[n][0].x+Th[n][1].x+Th[n][2].x);
+    bary = 1.0/3.0*(Th[n][0].y+Th[n][1].y+Th[n][2].y);
+    f<<psi0(barx,bary)<<endl;
+  }
+  f<<"End"<<endl;
+} // EOM

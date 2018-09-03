@@ -1,0 +1,155 @@
+/* Geometric optimization of the shape of a cantilever */
+load "medit"
+
+/* Border of the initial domain */
+border left1(t=0.0,0.1){x = 0.0; y = 1.0-t; label = 1;};
+border left2(t=0.1,0.9){x = 0.0; y = 1.0-t; label = 0;};
+border left3(t=0.9,1.0){x = 0.0; y = 1.0-t; label = 1;};
+border bottom(t=0.0,2.0){x=1.0/2.0*t; y= 0.2*t; label=0;};
+border right(t=0.0,0.2){x = 1.0; y = 0.4+t; label = 2;};
+border top(t=0.0,2.0){x =1.0-1.0/2.0*t; y = 0.6+0.2*t; label = 0;};
+border h1 (t=0.0,2.0*pi){x=0.2+0.05*cos(t); y=0.65+0.05*sin(t); label=0;};
+border h2 (t=0.0,2.0*pi){x=0.1+0.05*cos(t); y=0.5+0.05*sin(t); label=0;};
+border h3 (t=0.0,2.0*pi){x=0.2+0.05*cos(t); y=0.35+0.05*sin(t); label=0;};
+border h4 (t=0.0,2.0*pi){x=0.4+0.05*cos(t); y=0.5+0.05*sin(t); label=0;};
+border h5 (t=0.0,2.0*pi){x=0.6+0.05*cos(t); y=0.4+0.05*sin(t); label=0;};
+border h6 (t=0.0,2.0*pi){x=0.75+0.05*cos(t); y=0.5+0.05*sin(t); label=0;};
+border h7 (t=0.0,2.0*pi){x=0.6+0.05*cos(t); y=0.6+0.05*sin(t); label=0;};
+
+/* Create, then display initial mesh */
+mesh Th = buildmesh( left1(10) + left2(30) + left3(10) + bottom(100) + right(20) 
+           + top(100) + h1(-10) + h2(-10) + h3(-10) + h4(-10) + h5(-10) + h6(-10) + h7(-10) );
+plot(Th,wait=1,ps="initial mesh");
+
+/* Parameters */
+real eps = 1.e-6;
+real gx = 0.0;
+real gy = -1.0;
+real mu = 0.3846;
+real lambda = 0.5769;
+real cply = 0.0;
+real obj = 0.0,newobj = 0.0;
+mesh Dh;
+int nit = 200;
+real meshsiz = 0.02;
+real alpha = (2.0*meshsiz)^2;
+real gmax;
+real coef = 0.1;
+real coefmax = 0.2;
+real coefmin = 0.01;
+real step;
+real chkvoltri;
+real epsvoltri = 1.e-6;
+real tol = 0.01;
+real tgv = 1.e10;
+real vol = 0.0;
+real ell = 5.0;
+real muel = 0.3846;
+real lambdael = 0.5769;
+string s; 
+
+/* Finite element spaces: P1 elements for the resolution of the linearized elasticity system */
+fespace Vh(Th,P1);
+fespace Vh0(Th,P0);
+
+/* Functions */
+Vh   ux,uy,vx,vy,grx,gry,ng,uox,uoy,chidir;
+Vh0  gr0;
+
+/* Linearized elasticity system */
+problem elas([ux,uy],[vx,vy],solver=Crout) =
+  int2d(Th)( 2.0*mu*(dx(ux)*dx(vx) + 0.5*(dy(ux)+dx(uy))*(dy(vx)+dx(vy)) + dy(uy)*dy(vy))
+              + lambda*(dx(ux)+dy(uy))*(dx(vx)+dy(vy)) )
+  - int1d(Th,2)(gx*vx+gy*vy)
+  + on(1,ux=0.0,uy=0.0);
+
+/* Localization function for nodes to be frozen */
+func real locdir() {
+  if ( ( ( y < 0.11 || y > 0.89 ) && x < 0.01 ) || ( x > 1.99 ) ) return(1.0);
+  else return(0.0);
+}
+chidir = locdir();
+
+/* Tangential derivative */
+macro Dt(u) [dx(u)-(dx(u)*N.x+dy(u)*N.y)*N.x,dy(u)-(dx(u)*N.x+dy(u)*N.y)*N.y] // EOM
+
+/* Extension / regularization problem */
+problem velext([grx,gry],[vx,vy],solver=Crout) =
+  int2d(Th)(muel*(2.0*dx(grx)*dx(vx) + (dx(gry)+dy(grx))*(dx(vy)+dy(vx)) + 2.0*dy(gry)*dy(vy))
+                + lambdael*(dx(grx)+dy(gry))*(dx(vx)+dy(vy)) + (1.0+chidir*tgv)*(grx*vx+gry*vy) )
+  + int1d(Th,0)( alpha*(Dt(grx)'*Dt(vx) + Dt(gry)'*Dt(vy)) )
+  - int1d(Th,0)( gr0*(N.x*vx+N.y*vy) )
+  + on(1,2,grx=0.0,gry=0.0);
+
+/* Objective function */
+macro J() ( int2d(Th)( 2.0*mu*(dx(ux)*dx(ux) + 0.5*(dy(ux)+dx(uy))*(dy(ux)+dx(uy)) + dy(uy)*dy(uy)) + lambda*(dx(ux)+dy(uy))*(dx(ux)+dy(uy))) ) // EOM
+
+/* (Negative) shape gradient of J */
+macro dJ() {
+  gr0 = 2.0*mu*(dx(ux)*dx(ux) + 0.5*(dy(ux)+dx(uy))*(dy(ux)+dx(uy)) + dy(uy)*dy(uy)) + lambda*(dx(ux)+dy(uy))*(dx(ux)+dy(uy)) - ell;
+  velext;
+} // EOM
+
+/* Initialization */
+elas;
+
+/* Initial value of the objective function */
+vol     = int2d(Th)( 1.0 );
+obj     = J + ell*vol;
+
+/* Main optimization loop */
+for(int n=0; n<nit; n++){
+  if ( n % 5 == 0 ) {
+    s =  "canti."+n+".mesh";
+    savemesh(Th,s);
+  }
+   
+  /* Computation of the shape gradient as a P1 function and size of the time step */
+  dJ;
+  ng = sqrt(grx*grx+gry*gry);
+  gmax = ng[].max;
+  step = coef*meshsiz / (eps^2+gmax);
+  
+  /* Attempt motion of the mesh: if the moved mesh has an almost null or flipped element, restart the operation with a smaller step */
+  chkvoltri = checkmovemesh(Th,[x+step*grx,y+step*gry]);
+
+  if( chkvoltri < epsvoltri ) {
+    cout<<"Iteration "<<n<<" rejected; inverted triangle."<<endl;
+    coef *= 0.5;
+    continue;
+  }
+    
+  /* Else, effectively move the new mesh */
+  Dh = movemesh(Th,[x+step*grx,y+step*gry]);
+    
+  /* Resolution of the state equation */
+  uox = ux;
+  uoy = uy;
+  elas;
+  
+  /* Evaluation of the new objective function */
+  vol    = int2d(Th)( 1.0 );
+  newobj = J + ell*vol;
+  
+  /* Decision */
+  if( newobj < obj+tol*abs(obj) || coef <= coefmin ) {
+    cout<<"Iteration "<<n<<" accepted; objective: "<<obj<<" ---> "<<newobj<<endl;
+    obj   = newobj;
+    coef  = min(coefmax,1.02*coef);
+    Th    = Dh;
+    
+    /* Adapt the mesh to the current solution of the elasticity system */
+    Th = adaptmesh(Th,[ux,uy],hmin=0.01,hmax=0.01);
+    plot(Th,wait=1,ps="current mesh");
+  }
+  else {
+    cout<<"Iteration "<<n<<" rejected; objective: "<<obj<<" v.s. "<<newobj<<endl;
+    coef  = max(coefmin,0.6*coef);
+    ux    = uox;
+    uy    = uoy;
+  }
+}
+
+/* Print mesh and solution */
+savemesh(Th,"canti.mesh");
+//savesol("pipe.sol",Th,[ux,uy]);
