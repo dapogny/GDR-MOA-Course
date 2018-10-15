@@ -3,6 +3,8 @@
 
 [GDR MOA annual days](http://gdrmoa.math.cnrs.fr/activites/journees-annuelles-2018-gdr-moa/)
 
+* See the syllabus file for an outlook of the course. 
+
 * The slides of the lectures may be downloaded from the following [link](https://www.dropbox.com/s/vgijlc6mowud5ou/coursoptim.pdf?dl=0).
 
 * For any comment or suggestion, do not hesitate to contact the author!
