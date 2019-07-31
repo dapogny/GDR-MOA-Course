@@ -5,6 +5,6 @@
 
 * See the syllabus file for an outlook of the course. 
 
-* The slides of the lectures may be downloaded from the following [link](https://www.dropbox.com/s/vgijlc6mowud5ou/coursoptim.pdf?dl=0).
+* The slides of the lectures may be downloaded from the following [link](https://hal-univ-tlse3.archives-ouvertes.fr/LJK/cel-01923097v1).
 
 * For any comment or suggestion, do not hesitate to contact the author!
